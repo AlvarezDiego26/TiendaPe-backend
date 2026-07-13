@@ -1,0 +1,40 @@
+namespace TiendaPe.Api;
+
+public sealed record ProductRequest(
+    string Name,
+    string? Category,
+    string? InternalCode,
+    string? Barcode,
+    string? Brand,
+    string? Presentation,
+    string? Unit,
+    string? Supplier,
+    decimal PurchasePrice,
+    decimal SalePrice,
+    decimal? WholesalePrice,
+    int Stock,
+    int MinimumStock,
+    DateTime? ExpirationDate,
+    string? Location,
+    string? Notes);
+
+public sealed record ProductResponse(
+    Guid Id,
+    string Name,
+    string Category,
+    string? InternalCode,
+    string? Barcode,
+    string? Brand,
+    string? Presentation,
+    string? Unit,
+    string? Supplier,
+    decimal PurchasePrice,
+    decimal SalePrice,
+    decimal? WholesalePrice,
+    int Stock,
+    int MinimumStock,
+    DateTime? ExpirationDate,
+    string? Location,
+    string? Notes,
+    bool IsActive,
+    bool IsLowStock);

@@ -1,0 +1,13 @@
+namespace TiendaPe.Api;
+
+public sealed record SummaryResponse(
+    decimal Income,
+    decimal Expenses,
+    decimal CostOfGoodsSold,
+    decimal NetProfit,
+    decimal CashSales,
+    decimal DigitalSales);
+
+public sealed record TopProductResponse(Guid ProductId, string ProductName, int Quantity, decimal Income);
+public sealed record StagnantProductResponse(Guid ProductId, string Name, int Stock, DateTime? LastSaleAt);
+public sealed record InventoryValueResponse(decimal Value);
