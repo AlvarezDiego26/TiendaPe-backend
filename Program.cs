@@ -19,6 +19,8 @@ if (string.IsNullOrWhiteSpace(connectionString))
     throw new InvalidOperationException("Connection string 'TiendaPeDb' or environment variable 'TIENDAPE_DB' is not configured.");
 }
 
+connectionString = NormalizePostgresConnectionString(connectionString);
+
 var connectionBuilder = new NpgsqlConnectionStringBuilder(connectionString)
 {
     NoResetOnClose = true
@@ -161,4 +163,28 @@ static async Task EnsureDatabasePerformanceAsync(IServiceProvider services)
         create index if not exists idx_sale_items_product_id
             on sale_items (product_id);
         """);
+}
+
+static string NormalizePostgresConnectionString(string connectionString)
+{
+    if (!Uri.TryCreate(connectionString, UriKind.Absolute, out var uri) ||
+        (uri.Scheme != "postgresql" && uri.Scheme != "postgres"))
+    {
+        return connectionString;
+    }
+
+    var userInfo = uri.UserInfo.Split(':', 2);
+    var username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : "";
+    var password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "";
+    var database = uri.AbsolutePath.TrimStart('/');
+
+    return new NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.Port > 0 ? uri.Port : 5432,
+        Database = Uri.UnescapeDataString(database),
+        Username = username,
+        Password = password,
+        SslMode = SslMode.Require
+    }.ConnectionString;
 }
