@@ -1,0 +1,11 @@
+bin/
+obj/
+.git/
+.vs/
+.vscode/
+
+logs/
+*.log
+
+appsettings.Local.json
+*.Development.local.json
