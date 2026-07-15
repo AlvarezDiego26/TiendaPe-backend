@@ -40,53 +40,36 @@ public sealed class ExpensesController(TiendaPeDbContext db) : ControllerBase
             return BadRequest("La fecha final no puede ser menor que la fecha inicial.");
         }
 
-        var connection = db.Database.GetDbConnection();
-        if (connection.State != System.Data.ConnectionState.Open)
+        if (request.SupplierId.HasValue && !await db.Suppliers.AnyAsync(x => x.Id == request.SupplierId.Value && x.IsActive, cancellationToken))
         {
-            await connection.OpenAsync(cancellationToken);
+            return BadRequest("Proveedor no encontrado.");
         }
 
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            insert into expenses (category, description, amount, payment_method, cash_session_id, is_recurring, due_day, recurring_start, recurring_end)
-            values (
-                @category,
-                @description,
-                @amount,
-                cast(@payment_method as payment_method),
-                (select id from cash_sessions where closed_at is null order by opened_at desc limit 1),
-                @is_recurring,
-                @due_day,
-                @recurring_start,
-                @recurring_end
-            )
-            returning id, occurred_at, category, description, amount, payment_method::text, cash_session_id, is_recurring, due_day, recurring_start, recurring_end;
-            """;
+        var cashSessionId = await db.CashSessions
+            .Where(x => x.ClosedAt == null)
+            .OrderByDescending(x => x.OpenedAt)
+            .Select(x => (Guid?)x.Id)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        AddParameter(command, "category", category.ToApiValue());
-        AddParameter(command, "description", request.Description.Trim());
-        AddParameter(command, "amount", request.Amount, System.Data.DbType.Decimal);
-        AddParameter(command, "payment_method", paymentMethod.ToApiValue());
-        AddParameter(command, "is_recurring", request.IsRecurring, System.Data.DbType.Boolean);
-        AddParameter(command, "due_day", request.IsRecurring ? request.DueDay : null, System.Data.DbType.Int16);
-        AddParameter(command, "recurring_start", request.IsRecurring ? request.RecurringStart?.Date : null, System.Data.DbType.Date);
-        AddParameter(command, "recurring_end", request.IsRecurring ? request.RecurringEnd?.Date : null, System.Data.DbType.Date);
+        var expense = new Expense
+        {
+            Category = category.ToApiValue(),
+            Description = request.Description.Trim(),
+            Amount = request.Amount,
+            PaymentMethod = paymentMethod,
+            CashSessionId = cashSessionId,
+            IsRecurring = request.IsRecurring,
+            DueDay = request.IsRecurring ? request.DueDay : null,
+            RecurringStart = request.IsRecurring ? request.RecurringStart?.Date : null,
+            RecurringEnd = request.IsRecurring ? request.RecurringEnd?.Date : null,
+            SupplierId = request.SupplierId,
+            IsSupplierPayment = request.IsSupplierPayment
+        };
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        await reader.ReadAsync(cancellationToken);
+        db.Expenses.Add(expense);
+        await db.SaveChangesAsync(cancellationToken);
 
-        return Ok(new ExpenseResponse(
-            reader.GetGuid(0),
-            reader.GetDateTime(1),
-            reader.GetString(2),
-            reader.GetString(3),
-            reader.GetDecimal(4),
-            reader.GetString(5),
-            reader.IsDBNull(6) ? null : reader.GetGuid(6),
-            reader.GetBoolean(7),
-            reader.IsDBNull(8) ? null : reader.GetInt16(8),
-            reader.IsDBNull(9) ? null : reader.GetDateTime(9),
-            reader.IsDBNull(10) ? null : reader.GetDateTime(10)));
+        return Ok(ToResponse(expense));
     }
 
     [HttpGet("{id:guid}")]
@@ -124,6 +107,11 @@ public sealed class ExpensesController(TiendaPeDbContext db) : ControllerBase
             return BadRequest("La fecha final no puede ser menor que la fecha inicial.");
         }
 
+        if (request.SupplierId.HasValue && !await db.Suppliers.AnyAsync(x => x.Id == request.SupplierId.Value && x.IsActive, cancellationToken))
+        {
+            return BadRequest("Proveedor no encontrado.");
+        }
+
         var expense = await db.Expenses.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (expense is null)
         {
@@ -138,6 +126,8 @@ public sealed class ExpensesController(TiendaPeDbContext db) : ControllerBase
         expense.DueDay = request.IsRecurring ? request.DueDay : null;
         expense.RecurringStart = request.IsRecurring ? request.RecurringStart?.Date : null;
         expense.RecurringEnd = request.IsRecurring ? request.RecurringEnd?.Date : null;
+        expense.SupplierId = request.SupplierId;
+        expense.IsSupplierPayment = request.IsSupplierPayment;
 
         await db.SaveChangesAsync(cancellationToken);
         return Ok(ToResponse(expense));
@@ -214,7 +204,9 @@ public sealed class ExpensesController(TiendaPeDbContext db) : ControllerBase
         expense.IsRecurring,
         expense.DueDay,
         expense.RecurringStart,
-        expense.RecurringEnd);
+        expense.RecurringEnd,
+        expense.SupplierId,
+        expense.IsSupplierPayment);
 
     private static void AddParameter(
         System.Data.Common.DbCommand command,

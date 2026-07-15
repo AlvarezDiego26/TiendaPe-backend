@@ -20,6 +20,9 @@ public partial class SaleItem
     [Column("product_id")]
     public Guid ProductId { get; set; }
 
+    [Column("presentation_id")]
+    public Guid? PresentationId { get; set; }
+
     [Column("product_name")]
     public string ProductName { get; set; } = null!;
 
@@ -34,9 +37,27 @@ public partial class SaleItem
     [Precision(12, 2)]
     public decimal Subtotal { get; set; }
 
+    [Column("quantity_base")]
+    [Precision(14, 3)]
+    public decimal QuantityBase { get; set; }
+
+    [Column("input_unit")]
+    public string? InputUnit { get; set; }
+
+    [Column("unit_cost_base")]
+    [Precision(12, 4)]
+    public decimal? UnitCostBase { get; set; }
+
+    [Column("profit")]
+    [Precision(12, 2)]
+    public decimal? Profit { get; set; }
+
     [ForeignKey("ProductId")]
     [InverseProperty("SaleItems")]
     public virtual Product Product { get; set; } = null!;
+
+    [ForeignKey("PresentationId")]
+    public ProductPresentation? Presentation { get; set; }
 
     [ForeignKey("SaleId")]
     [InverseProperty("SaleItems")]

@@ -29,7 +29,9 @@ connectionString = connectionBuilder.ConnectionString;
 
 var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
 dataSourceBuilder.MapEnum<InventoryMovementType>("public.inventory_movement_type");
+dataSourceBuilder.MapEnum<InventoryMovementReason>("public.inventory_movement_reason");
 dataSourceBuilder.MapEnum<PaymentMethod>("public.payment_method");
+dataSourceBuilder.MapEnum<ProductTrackingType>("public.product_tracking_type");
 var dataSource = dataSourceBuilder.Build();
 
 builder.Services.AddDbContext<TiendaPeDbContext>(options =>
@@ -115,11 +117,39 @@ static async Task EnsureDatabasePerformanceAsync(IServiceProvider services)
     db.Database.SetCommandTimeout(120);
 
     await db.Database.ExecuteSqlRawAsync("""
+        do $$
+        begin
+            create type product_tracking_type as enum ('unit', 'package', 'weight', 'bulk');
+        exception
+            when duplicate_object then null;
+        end $$;
+
+        do $$
+        begin
+            create type inventory_movement_reason as enum ('purchase', 'sale', 'adjustment', 'return', 'initial_stock', 'waste');
+        exception
+            when duplicate_object then null;
+        end $$;
+
         alter table expenses
             add column if not exists recurring_start date;
 
         alter table expenses
             add column if not exists recurring_end date;
+
+        create table if not exists suppliers (
+            id uuid primary key default gen_random_uuid(),
+            name text not null,
+            phone text null,
+            company text null,
+            notes text null,
+            last_purchase_at timestamptz null,
+            total_purchased numeric(12,2) not null default 0,
+            pending_balance numeric(12,2) not null default 0,
+            is_active boolean not null default true,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+        );
 
         alter table products
             add column if not exists internal_code text,
@@ -131,7 +161,107 @@ static async Task EnsureDatabasePerformanceAsync(IServiceProvider services)
             add column if not exists wholesale_price numeric(12,2),
             add column if not exists expiration_date date,
             add column if not exists location text,
+            add column if not exists notes text,
+            add column if not exists base_unit text not null default 'unidad',
+            add column if not exists tracking_type product_tracking_type not null default 'unit',
+            add column if not exists profit_margin_percent numeric(8,2),
+            add column if not exists suggested_price numeric(12,2),
+            add column if not exists purchase_unit text,
+            add column if not exists sale_unit text,
+            add column if not exists units_per_package numeric(12,3) not null default 1,
+            add column if not exists entry_date date,
+            add column if not exists supplier_id uuid references suppliers(id),
+            add column if not exists stock_base numeric(14,3) not null default 0,
+            add column if not exists minimum_stock_base numeric(14,3) not null default 0,
+            add column if not exists average_cost_base numeric(12,4) not null default 0;
+
+        create table if not exists product_presentations (
+            id uuid primary key default gen_random_uuid(),
+            product_id uuid not null references products(id) on delete cascade,
+            name text not null,
+            unit_label text not null,
+            quantity_in_base_unit numeric(14,3) not null default 1,
+            purchase_enabled boolean not null default true,
+            sale_enabled boolean not null default true,
+            barcode text null,
+            purchase_cost numeric(12,2) null,
+            sale_price numeric(12,2) null,
+            wholesale_price numeric(12,2) null,
+            suggested_price numeric(12,2) null,
+            profit_margin_percent numeric(8,2) null,
+            is_default_purchase boolean not null default false,
+            is_default_sale boolean not null default false,
+            is_active boolean not null default true,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+        );
+
+        create table if not exists inventory_movement_logs (
+            id uuid primary key default gen_random_uuid(),
+            product_id uuid not null references products(id),
+            presentation_id uuid null references product_presentations(id),
+            reason inventory_movement_reason not null,
+            quantity_input numeric(14,3) not null,
+            input_unit text not null,
+            quantity_base numeric(14,3) not null,
+            unit_cost_base numeric(12,4) null,
+            total_cost numeric(12,2) null,
+            reference_table text null,
+            reference_id uuid null,
+            notes text null,
+            occurred_at timestamptz not null default now(),
+            created_at timestamptz not null default now()
+        );
+
+        alter table purchases
+            add column if not exists supplier_id uuid references suppliers(id),
+            add column if not exists payment_method text not null default 'cash',
+            add column if not exists paid_amount numeric(12,2) not null default 0,
+            add column if not exists pending_amount numeric(12,2) not null default 0,
             add column if not exists notes text;
+
+        alter table purchase_items
+            add column if not exists presentation_id uuid references product_presentations(id),
+            add column if not exists quantity_base numeric(14,3) not null default 0,
+            add column if not exists input_unit text,
+            add column if not exists units_per_package numeric(14,3) not null default 1,
+            add column if not exists total_cost numeric(12,2),
+            add column if not exists unit_cost_base numeric(12,4),
+            add column if not exists suggested_price numeric(12,2),
+            add column if not exists profit_margin_percent numeric(8,2);
+
+        alter table sale_items
+            add column if not exists presentation_id uuid references product_presentations(id),
+            add column if not exists quantity_base numeric(14,3) not null default 0,
+            add column if not exists input_unit text,
+            add column if not exists unit_cost_base numeric(12,4),
+            add column if not exists profit numeric(12,2);
+
+        alter table cash_sessions
+            add column if not exists cash_sales numeric(12,2) not null default 0,
+            add column if not exists yape_sales numeric(12,2) not null default 0,
+            add column if not exists plin_sales numeric(12,2) not null default 0,
+            add column if not exists transfer_sales numeric(12,2) not null default 0,
+            add column if not exists supplier_payments numeric(12,2) not null default 0,
+            add column if not exists personal_withdrawals numeric(12,2) not null default 0,
+            add column if not exists final_cash numeric(12,2);
+
+        alter table expenses
+            add column if not exists supplier_id uuid references suppliers(id),
+            add column if not exists is_supplier_payment boolean not null default false;
+
+        create table if not exists cash_movements (
+            id uuid primary key default gen_random_uuid(),
+            cash_session_id uuid not null references cash_sessions(id),
+            type text not null,
+            payment_method text not null default 'cash',
+            amount numeric(12,2) not null,
+            description text null,
+            reference_table text null,
+            reference_id uuid null,
+            occurred_at timestamptz not null default now(),
+            created_at timestamptz not null default now()
+        );
 
         create index if not exists idx_products_active_id
             on products (is_active, id);
@@ -141,6 +271,19 @@ static async Task EnsureDatabasePerformanceAsync(IServiceProvider services)
 
         create index if not exists idx_products_active_barcode
             on products (is_active, barcode);
+
+        create index if not exists idx_product_presentations_product
+            on product_presentations (product_id);
+
+        create index if not exists idx_product_presentations_barcode
+            on product_presentations (barcode)
+            where barcode is not null;
+
+        create index if not exists idx_inventory_movement_logs_product
+            on inventory_movement_logs (product_id, occurred_at desc);
+
+        create index if not exists idx_suppliers_active
+            on suppliers (is_active, name);
 
         create index if not exists idx_cash_sessions_open
             on cash_sessions (closed_at, opened_at desc);

@@ -16,7 +16,36 @@ public sealed record ProductRequest(
     int MinimumStock,
     DateTime? ExpirationDate,
     string? Location,
-    string? Notes);
+    string? Notes,
+    string? BaseUnit = null,
+    string? TrackingType = null,
+    decimal? ProfitMarginPercent = null,
+    decimal? SuggestedPrice = null,
+    string? PurchaseUnit = null,
+    string? SaleUnit = null,
+    decimal? UnitsPerPackage = null,
+    DateTime? EntryDate = null,
+    Guid? SupplierId = null,
+    decimal? StockBase = null,
+    decimal? MinimumStockBase = null,
+    decimal? AverageCostBase = null,
+    IReadOnlyList<ProductPresentationRequest>? Presentations = null);
+
+public sealed record ProductPresentationRequest(
+    Guid? Id,
+    string Name,
+    string? UnitLabel,
+    decimal QuantityInBaseUnit,
+    bool PurchaseEnabled,
+    bool SaleEnabled,
+    string? Barcode,
+    decimal? PurchaseCost,
+    decimal? SalePrice,
+    decimal? WholesalePrice,
+    decimal? SuggestedPrice,
+    decimal? ProfitMarginPercent,
+    bool IsDefaultPurchase,
+    bool IsDefaultSale);
 
 public sealed record ProductResponse(
     Guid Id,
@@ -37,4 +66,34 @@ public sealed record ProductResponse(
     string? Location,
     string? Notes,
     bool IsActive,
-    bool IsLowStock);
+    bool IsLowStock,
+    string BaseUnit,
+    string TrackingType,
+    decimal? ProfitMarginPercent,
+    decimal? SuggestedPrice,
+    string? PurchaseUnit,
+    string? SaleUnit,
+    decimal UnitsPerPackage,
+    DateTime? EntryDate,
+    Guid? SupplierId,
+    decimal StockBase,
+    decimal MinimumStockBase,
+    decimal AverageCostBase,
+    IReadOnlyList<ProductPresentationResponse> Presentations);
+
+public sealed record ProductPresentationResponse(
+    Guid Id,
+    string Name,
+    string UnitLabel,
+    decimal QuantityInBaseUnit,
+    bool PurchaseEnabled,
+    bool SaleEnabled,
+    string? Barcode,
+    decimal? PurchaseCost,
+    decimal? SalePrice,
+    decimal? WholesalePrice,
+    decimal? SuggestedPrice,
+    decimal? ProfitMarginPercent,
+    bool IsDefaultPurchase,
+    bool IsDefaultSale,
+    bool IsActive);

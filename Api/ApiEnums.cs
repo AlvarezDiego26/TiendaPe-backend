@@ -34,6 +34,32 @@ public static class ApiEnums
         return value.Trim().ToLowerInvariant() is "cash" or "efectivo" or "yape_plin" or "yape-plin" or "yape/plin" or "yape" or "plin";
     }
 
+    public static string ToApiValue(this ProductTrackingType value) => value switch
+    {
+        ProductTrackingType.Unit => "unit",
+        ProductTrackingType.Package => "package",
+        ProductTrackingType.Weight => "weight",
+        ProductTrackingType.Bulk => "bulk",
+        _ => value.ToString()
+    };
+
+    public static bool TryParseProductTrackingType(string? value, out ProductTrackingType result)
+    {
+        result = string.IsNullOrWhiteSpace(value)
+            ? ProductTrackingType.Unit
+            : value.Trim().ToLowerInvariant() switch
+            {
+                "unit" or "unidad" => ProductTrackingType.Unit,
+                "package" or "paquete" or "caja" => ProductTrackingType.Package,
+                "weight" or "peso" => ProductTrackingType.Weight,
+                "bulk" or "granel" => ProductTrackingType.Bulk,
+                _ => ProductTrackingType.Unit
+            };
+
+        return string.IsNullOrWhiteSpace(value) ||
+               value.Trim().ToLowerInvariant() is "unit" or "unidad" or "package" or "paquete" or "caja" or "weight" or "peso" or "bulk" or "granel";
+    }
+
     public static bool TryParseExpenseCategory(string value, out ExpenseCategory result)
     {
         result = value.Trim().ToLowerInvariant() switch

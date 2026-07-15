@@ -20,6 +20,9 @@ public partial class PurchaseItem
     [Column("product_id")]
     public Guid ProductId { get; set; }
 
+    [Column("presentation_id")]
+    public Guid? PresentationId { get; set; }
+
     [Column("product_name")]
     public string ProductName { get; set; } = null!;
 
@@ -30,6 +33,33 @@ public partial class PurchaseItem
     [Precision(12, 2)]
     public decimal UnitCost { get; set; }
 
+    [Column("quantity_base")]
+    [Precision(14, 3)]
+    public decimal QuantityBase { get; set; }
+
+    [Column("input_unit")]
+    public string? InputUnit { get; set; }
+
+    [Column("units_per_package")]
+    [Precision(14, 3)]
+    public decimal UnitsPerPackage { get; set; }
+
+    [Column("total_cost")]
+    [Precision(12, 2)]
+    public decimal? TotalCost { get; set; }
+
+    [Column("unit_cost_base")]
+    [Precision(12, 4)]
+    public decimal? UnitCostBase { get; set; }
+
+    [Column("suggested_price")]
+    [Precision(12, 2)]
+    public decimal? SuggestedPrice { get; set; }
+
+    [Column("profit_margin_percent")]
+    [Precision(8, 2)]
+    public decimal? ProfitMarginPercent { get; set; }
+
     [Column("subtotal")]
     [Precision(12, 2)]
     public decimal Subtotal { get; set; }
@@ -37,6 +67,9 @@ public partial class PurchaseItem
     [ForeignKey("ProductId")]
     [InverseProperty("PurchaseItems")]
     public virtual Product Product { get; set; } = null!;
+
+    [ForeignKey("PresentationId")]
+    public ProductPresentation? Presentation { get; set; }
 
     [ForeignKey("PurchaseId")]
     [InverseProperty("PurchaseItems")]

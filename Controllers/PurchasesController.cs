@@ -15,21 +15,37 @@ public sealed class PurchasesController(TiendaPeDbContext db) : ControllerBase
     [HttpPost]
     public async Task<ActionResult<PurchaseResponse>> Create(CreatePurchaseRequest request, CancellationToken cancellationToken)
     {
-        if (request.Items.Count == 0 || request.Items.Any(x => x.Quantity <= 0 || x.UnitCost < 0))
+        if (request.Items.Count == 0 || request.Items.Any(x => x.Quantity <= 0 || x.UnitCost < 0 || x.TotalCost.GetValueOrDefault() < 0))
         {
-            return BadRequest("La compra debe tener productos válidos.");
+            return BadRequest("La compra debe tener productos validos.");
         }
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
 
         var productIds = request.Items.Select(x => x.ProductId).Distinct().ToList();
         var products = await db.Products
+            .Include(x => x.Presentations.Where(p => p.IsActive))
             .Where(x => productIds.Contains(x.Id) && x.IsActive)
             .ToDictionaryAsync(x => x.Id, cancellationToken);
 
+        Supplier? supplier = null;
+        if (request.SupplierId.HasValue)
+        {
+            supplier = await db.Suppliers.SingleOrDefaultAsync(x => x.Id == request.SupplierId.Value && x.IsActive, cancellationToken);
+            if (supplier is null)
+            {
+                return BadRequest("Proveedor no encontrado.");
+            }
+        }
+
+        var supplierName = supplier?.Name ?? (string.IsNullOrWhiteSpace(request.Supplier) ? "Proveedor" : request.Supplier.Trim());
         var purchase = new Purchase
         {
-            Supplier = string.IsNullOrWhiteSpace(request.Supplier) ? "Proveedor" : request.Supplier.Trim()
+            Id = Guid.NewGuid(),
+            Supplier = supplierName,
+            SupplierId = supplier?.Id,
+            PaymentMethod = Clean(request.PaymentMethod) ?? "cash",
+            Notes = Clean(request.Notes)
         };
 
         foreach (var item in request.Items)
@@ -39,17 +55,43 @@ public sealed class PurchasesController(TiendaPeDbContext db) : ControllerBase
                 return BadRequest($"Producto no encontrado: {item.ProductId}");
             }
 
-            var subtotal = item.UnitCost * item.Quantity;
-            product.Stock += item.Quantity;
-            product.PurchasePrice = item.UnitCost;
-            purchase.Total += subtotal;
+            var presentation = ResolvePresentation(product, item.PresentationId, forPurchase: true);
+            var unitsPerPackage = item.UnitsPerPackage ?? presentation?.QuantityInBaseUnit ?? product.UnitsPerPackage;
+            if (unitsPerPackage <= 0)
+            {
+                unitsPerPackage = 1;
+            }
+
+            var quantityInput = item.Quantity;
+            var quantityBase = quantityInput * unitsPerPackage;
+            var totalCost = item.TotalCost ?? item.UnitCost * item.Quantity;
+            var unitCostBase = quantityBase > 0 ? Math.Round(totalCost / quantityBase, 4) : item.UnitCost;
+
+            var previousStockBase = product.StockBase > 0 ? product.StockBase : product.Stock;
+            product.StockBase = previousStockBase + quantityBase;
+            product.Stock = ToLegacyStock(product.StockBase);
+            product.PurchasePrice = unitCostBase;
+            product.AverageCostBase = CalculateWeightedAverageCost(previousStockBase, product.AverageCostBase, quantityBase, unitCostBase);
+            product.SuggestedPrice = item.SuggestedPrice ?? product.SuggestedPrice;
+            product.ProfitMarginPercent = item.ProfitMarginPercent ?? product.ProfitMarginPercent;
+            product.UpdatedAt = DateTime.UtcNow;
+
+            purchase.Total += totalCost;
             purchase.PurchaseItems.Add(new PurchaseItem
             {
                 ProductId = product.Id,
+                PresentationId = presentation?.Id,
                 ProductName = product.Name,
                 Quantity = item.Quantity,
                 UnitCost = item.UnitCost,
-                Subtotal = subtotal
+                QuantityBase = quantityBase,
+                InputUnit = Clean(item.InputUnit) ?? presentation?.UnitLabel ?? product.PurchaseUnit ?? product.BaseUnit,
+                UnitsPerPackage = unitsPerPackage,
+                TotalCost = totalCost,
+                UnitCostBase = unitCostBase,
+                SuggestedPrice = item.SuggestedPrice,
+                ProfitMarginPercent = item.ProfitMarginPercent,
+                Subtotal = totalCost
             });
 
             db.InventoryMovements.Add(new InventoryMovement
@@ -57,9 +99,35 @@ public sealed class PurchasesController(TiendaPeDbContext db) : ControllerBase
                 ProductId = product.Id,
                 ProductName = product.Name,
                 MovementType = InventoryMovementType.Entry,
-                Quantity = item.Quantity,
-                Reason = $"Compra a {purchase.Supplier}"
+                Quantity = ToLegacyStock(quantityBase),
+                Reason = $"Compra a {supplierName}"
             });
+
+            db.InventoryMovementLogs.Add(new InventoryMovementLog
+            {
+                ProductId = product.Id,
+                PresentationId = presentation?.Id,
+                Reason = InventoryMovementReason.Purchase,
+                QuantityInput = quantityInput,
+                InputUnit = Clean(item.InputUnit) ?? presentation?.UnitLabel ?? product.PurchaseUnit ?? product.BaseUnit,
+                QuantityBase = quantityBase,
+                UnitCostBase = unitCostBase,
+                TotalCost = totalCost,
+                ReferenceTable = "purchases",
+                ReferenceId = purchase.Id,
+                Notes = $"Compra a {supplierName}"
+            });
+        }
+
+        purchase.PaidAmount = request.PaidAmount ?? purchase.Total;
+        purchase.PendingAmount = Math.Max(0, purchase.Total - purchase.PaidAmount);
+
+        if (supplier is not null)
+        {
+            supplier.LastPurchaseAt = purchase.OccurredAt == default ? DateTime.UtcNow : purchase.OccurredAt;
+            supplier.TotalPurchased += purchase.Total;
+            supplier.PendingBalance += purchase.PendingAmount;
+            supplier.UpdatedAt = DateTime.UtcNow;
         }
 
         db.Purchases.Add(purchase);
@@ -102,10 +170,60 @@ public sealed class PurchasesController(TiendaPeDbContext db) : ControllerBase
         return Ok(purchases.Select(ToResponse).ToList());
     }
 
+    private static ProductPresentation? ResolvePresentation(Product product, Guid? presentationId, bool forPurchase)
+    {
+        if (presentationId.HasValue)
+        {
+            return product.Presentations.FirstOrDefault(x => x.Id == presentationId.Value && x.IsActive);
+        }
+
+        return product.Presentations
+            .Where(x => x.IsActive && (forPurchase ? x.PurchaseEnabled : x.SaleEnabled))
+            .OrderByDescending(x => forPurchase ? x.IsDefaultPurchase : x.IsDefaultSale)
+            .FirstOrDefault();
+    }
+
+    private static decimal CalculateWeightedAverageCost(decimal previousStock, decimal previousCost, decimal addedStock, decimal addedCost)
+    {
+        if (previousStock <= 0)
+        {
+            return addedCost;
+        }
+
+        var totalStock = previousStock + addedStock;
+        if (totalStock <= 0)
+        {
+            return addedCost;
+        }
+
+        return Math.Round(((previousStock * previousCost) + (addedStock * addedCost)) / totalStock, 4);
+    }
+
     private static PurchaseResponse ToResponse(Purchase purchase) => new(
         purchase.Id,
         purchase.OccurredAt,
         purchase.Supplier,
         purchase.Total,
-        purchase.PurchaseItems.Select(x => new PurchaseItemResponse(x.ProductId, x.ProductName, x.Quantity, x.UnitCost, x.Subtotal)).ToList());
+        purchase.SupplierId,
+        purchase.PaymentMethod,
+        purchase.PaidAmount,
+        purchase.PendingAmount,
+        purchase.Notes,
+        purchase.PurchaseItems.Select(x => new PurchaseItemResponse(
+            x.ProductId,
+            x.ProductName,
+            x.Quantity,
+            x.UnitCost,
+            x.Subtotal,
+            x.PresentationId,
+            x.QuantityBase,
+            x.InputUnit,
+            x.UnitsPerPackage,
+            x.UnitCostBase,
+            x.SuggestedPrice,
+            x.ProfitMarginPercent)).ToList());
+
+    private static int ToLegacyStock(decimal stockBase) => stockBase <= 0 ? 0 : (int)Math.Floor(stockBase);
+
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

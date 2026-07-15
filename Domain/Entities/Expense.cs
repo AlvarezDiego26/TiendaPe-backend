@@ -44,6 +44,12 @@ public partial class Expense
     [Column("due_day")]
     public short? DueDay { get; set; }
 
+    [Column("supplier_id")]
+    public Guid? SupplierId { get; set; }
+
+    [Column("is_supplier_payment")]
+    public bool IsSupplierPayment { get; set; }
+
     [Column("recurring_start")]
     public DateTime? RecurringStart { get; set; }
 
@@ -53,4 +59,7 @@ public partial class Expense
     [ForeignKey("CashSessionId")]
     [InverseProperty("Expenses")]
     public virtual CashSession? CashSession { get; set; }
+
+    [ForeignKey("SupplierId")]
+    public virtual Supplier? Supplier { get; set; }
 }

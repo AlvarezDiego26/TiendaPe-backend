@@ -17,7 +17,7 @@ public sealed class SalesController(TiendaPeDbContext db) : ControllerBase
     {
         if (!ApiEnums.TryParsePaymentMethod(request.PaymentMethod, out var paymentMethod))
         {
-            return BadRequest("Método de pago inválido.");
+            return BadRequest("Metodo de pago invalido.");
         }
 
         if (request.Items.Count == 0 || request.Items.Any(x => x.Quantity <= 0))
@@ -37,12 +37,13 @@ public sealed class SalesController(TiendaPeDbContext db) : ControllerBase
         }
 
         var groupedItems = request.Items
-            .GroupBy(x => x.ProductId)
-            .Select(x => new SaleItemRequest(x.Key, x.Sum(i => i.Quantity)))
+            .GroupBy(x => new { x.ProductId, x.PresentationId })
+            .Select(x => new SaleItemRequest(x.Key.ProductId, x.Sum(i => i.Quantity), x.Key.PresentationId))
             .ToList();
 
-        var productIds = groupedItems.Select(x => x.ProductId).ToList();
+        var productIds = groupedItems.Select(x => x.ProductId).Distinct().ToList();
         var products = await db.Products
+            .Include(x => x.Presentations.Where(p => p.IsActive))
             .Where(x => productIds.Contains(x.Id) && x.IsActive)
             .ToDictionaryAsync(x => x.Id, cancellationToken);
 
@@ -53,14 +54,18 @@ public sealed class SalesController(TiendaPeDbContext db) : ControllerBase
                 return BadRequest($"Producto no encontrado: {item.ProductId}");
             }
 
-            if (product.Stock < item.Quantity)
+            var presentation = ResolveSalePresentation(product, item.PresentationId);
+            var quantityBase = item.Quantity * (presentation?.QuantityInBaseUnit ?? 1);
+            var available = product.StockBase > 0 ? product.StockBase : product.Stock;
+            if (available < quantityBase)
             {
-                return BadRequest($"Stock insuficiente para {product.Name}. Disponible: {product.Stock}.");
+                return BadRequest($"Stock insuficiente para {product.Name}. Disponible: {available:0.###} {product.BaseUnit}.");
             }
         }
 
         var sale = new Sale
         {
+            Id = Guid.NewGuid(),
             PaymentMethod = paymentMethod,
             CashSessionId = cashSession.Id
         };
@@ -68,17 +73,31 @@ public sealed class SalesController(TiendaPeDbContext db) : ControllerBase
         foreach (var item in groupedItems)
         {
             var product = products[item.ProductId];
-            var subtotal = product.SalePrice * item.Quantity;
+            var presentation = ResolveSalePresentation(product, item.PresentationId);
+            var unitPrice = presentation?.SalePrice ?? product.SalePrice;
+            var quantityBase = item.Quantity * (presentation?.QuantityInBaseUnit ?? 1);
+            var inputUnit = presentation?.UnitLabel ?? product.SaleUnit ?? product.BaseUnit;
+            var unitCostBase = product.AverageCostBase > 0 ? product.AverageCostBase : product.PurchasePrice;
+            var subtotal = unitPrice * item.Quantity;
+            var profit = subtotal - (unitCostBase * quantityBase);
 
-            product.Stock -= item.Quantity;
+            product.StockBase = Math.Max(0, (product.StockBase > 0 ? product.StockBase : product.Stock) - quantityBase);
+            product.Stock = ToLegacyStock(product.StockBase);
+            product.UpdatedAt = DateTime.UtcNow;
+
             sale.Total += subtotal;
             sale.SaleItems.Add(new SaleItem
             {
                 ProductId = product.Id,
+                PresentationId = presentation?.Id,
                 ProductName = product.Name,
                 Quantity = item.Quantity,
-                UnitPrice = product.SalePrice,
-                Subtotal = subtotal
+                UnitPrice = unitPrice,
+                Subtotal = subtotal,
+                QuantityBase = quantityBase,
+                InputUnit = inputUnit,
+                UnitCostBase = unitCostBase,
+                Profit = profit
             });
 
             db.InventoryMovements.Add(new InventoryMovement
@@ -86,9 +105,33 @@ public sealed class SalesController(TiendaPeDbContext db) : ControllerBase
                 ProductId = product.Id,
                 ProductName = product.Name,
                 MovementType = InventoryMovementType.Sale,
-                Quantity = item.Quantity,
+                Quantity = ToLegacyStock(quantityBase),
                 Reason = $"Venta {paymentMethod.ToApiValue()}"
             });
+
+            db.InventoryMovementLogs.Add(new InventoryMovementLog
+            {
+                ProductId = product.Id,
+                PresentationId = presentation?.Id,
+                Reason = InventoryMovementReason.Sale,
+                QuantityInput = item.Quantity,
+                InputUnit = inputUnit,
+                QuantityBase = -quantityBase,
+                UnitCostBase = unitCostBase,
+                TotalCost = unitCostBase * quantityBase,
+                ReferenceTable = "sales",
+                ReferenceId = sale.Id,
+                Notes = $"Venta {paymentMethod.ToApiValue()}"
+            });
+        }
+
+        if (paymentMethod == PaymentMethod.Cash)
+        {
+            cashSession.CashSales += sale.Total;
+        }
+        else
+        {
+            cashSession.YapeSales += sale.Total;
         }
 
         db.Sales.Add(sale);
@@ -131,11 +174,36 @@ public sealed class SalesController(TiendaPeDbContext db) : ControllerBase
         return Ok(sales.Select(ToResponse).ToList());
     }
 
+    private static ProductPresentation? ResolveSalePresentation(Product product, Guid? presentationId)
+    {
+        if (presentationId.HasValue)
+        {
+            return product.Presentations.FirstOrDefault(x => x.Id == presentationId.Value && x.IsActive);
+        }
+
+        return product.Presentations
+            .Where(x => x.IsActive && x.SaleEnabled)
+            .OrderByDescending(x => x.IsDefaultSale)
+            .FirstOrDefault();
+    }
+
     private static SaleResponse ToResponse(Sale sale) => new(
         sale.Id,
         sale.OccurredAt,
         sale.PaymentMethod.ToApiValue(),
         sale.Total,
         sale.CashSessionId,
-        sale.SaleItems.Select(x => new SaleItemResponse(x.ProductId, x.ProductName, x.Quantity, x.UnitPrice, x.Subtotal)).ToList());
+        sale.SaleItems.Select(x => new SaleItemResponse(
+            x.ProductId,
+            x.ProductName,
+            x.Quantity,
+            x.UnitPrice,
+            x.Subtotal,
+            x.PresentationId,
+            x.QuantityBase,
+            x.InputUnit,
+            x.UnitCostBase,
+            x.Profit)).ToList());
+
+    private static int ToLegacyStock(decimal stockBase) => stockBase <= 0 ? 0 : (int)Math.Floor(stockBase);
 }

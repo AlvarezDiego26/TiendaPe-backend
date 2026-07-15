@@ -18,55 +18,31 @@ public sealed class ReportsController(TiendaPeDbContext db) : ControllerBase
         [FromQuery] DateTime? to,
         CancellationToken cancellationToken)
     {
-        var connection = db.Database.GetDbConnection();
-        if (connection.State != System.Data.ConnectionState.Open)
+        var salesQuery = db.Sales.AsNoTracking();
+        var expensesQuery = db.Expenses.AsNoTracking();
+        var saleItemsQuery = db.SaleItems.AsNoTracking().Include(x => x.Product).Where(x => true);
+
+        if (from.HasValue)
         {
-            await connection.OpenAsync(cancellationToken);
+            salesQuery = salesQuery.Where(x => x.OccurredAt >= from.Value);
+            expensesQuery = expensesQuery.Where(x => x.OccurredAt >= from.Value);
+            saleItemsQuery = saleItemsQuery.Where(x => x.Sale.OccurredAt >= from.Value);
         }
 
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = 120;
-        command.CommandText = """
-            select
-              (select coalesce(sum(total), 0) from sales where (@from is null or occurred_at >= @from) and (@to is null or occurred_at <= @to)) as income,
-              (select coalesce(sum(amount), 0) from expenses where (@from is null or occurred_at >= @from) and (@to is null or occurred_at <= @to)) as expenses,
-              (select coalesce(sum(si.quantity * p.purchase_price), 0)
-                 from sale_items si
-                 join sales s on s.id = si.sale_id
-                 join products p on p.id = si.product_id
-                where (@from is null or s.occurred_at >= @from)
-                  and (@to is null or s.occurred_at <= @to)) as cost_of_goods_sold,
-              (select coalesce(sum(total), 0) from sales where payment_method = 'cash'::payment_method and (@from is null or occurred_at >= @from) and (@to is null or occurred_at <= @to)) as cash_sales,
-              (select coalesce(sum(total), 0) from sales where payment_method = 'yape_plin'::payment_method and (@from is null or occurred_at >= @from) and (@to is null or occurred_at <= @to)) as digital_sales;
-            """;
-
-        var fromParameter = command.CreateParameter();
-        fromParameter.ParameterName = "from";
-        fromParameter.DbType = System.Data.DbType.DateTime;
-        fromParameter.Value = from.HasValue ? from.Value : DBNull.Value;
-        command.Parameters.Add(fromParameter);
-
-        var toParameter = command.CreateParameter();
-        toParameter.ParameterName = "to";
-        toParameter.DbType = System.Data.DbType.DateTime;
-        toParameter.Value = to.HasValue ? to.Value : DBNull.Value;
-        command.Parameters.Add(toParameter);
-
-        decimal income;
-        decimal expenses;
-        decimal costOfGoodsSold;
-        decimal cashSales;
-        decimal digitalSales;
-
-        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        if (to.HasValue)
         {
-            await reader.ReadAsync(cancellationToken);
-            income = reader.GetDecimal(0);
-            expenses = reader.GetDecimal(1);
-            costOfGoodsSold = reader.GetDecimal(2);
-            cashSales = reader.GetDecimal(3);
-            digitalSales = reader.GetDecimal(4);
+            salesQuery = salesQuery.Where(x => x.OccurredAt <= to.Value);
+            expensesQuery = expensesQuery.Where(x => x.OccurredAt <= to.Value);
+            saleItemsQuery = saleItemsQuery.Where(x => x.Sale.OccurredAt <= to.Value);
         }
+
+        var income = await salesQuery.SumAsync(x => x.Total, cancellationToken);
+        var expenses = await expensesQuery.SumAsync(x => x.Amount, cancellationToken);
+        var costOfGoodsSold = await saleItemsQuery.SumAsync(
+            x => (x.UnitCostBase ?? x.Product.PurchasePrice) * (x.QuantityBase == 0 ? x.Quantity : x.QuantityBase),
+            cancellationToken);
+        var cashSales = await salesQuery.Where(x => x.PaymentMethod == PaymentMethod.Cash).SumAsync(x => x.Total, cancellationToken);
+        var digitalSales = await salesQuery.Where(x => x.PaymentMethod == PaymentMethod.YapePlin).SumAsync(x => x.Total, cancellationToken);
 
         return Ok(new SummaryResponse(
             income,
@@ -84,57 +60,31 @@ public sealed class ReportsController(TiendaPeDbContext db) : ControllerBase
         [FromQuery] int limit = 5,
         CancellationToken cancellationToken = default)
     {
-        var connection = db.Database.GetDbConnection();
-        if (connection.State != System.Data.ConnectionState.Open)
-        {
-            await connection.OpenAsync(cancellationToken);
-        }
-
-        await using var command = connection.CreateCommand();
-        command.CommandTimeout = 20;
-        command.CommandText = from.HasValue || to.HasValue
-            ? """
-                select
-                    si.product_id,
-                    si.product_name,
-                    coalesce(sum(si.quantity), 0)::int as quantity,
-                    coalesce(sum(si.subtotal), 0) as income
-                from sale_items si
-                join sales s on s.id = si.sale_id
-                where (@from is null or s.occurred_at >= @from)
-                  and (@to is null or s.occurred_at <= @to)
-                group by si.product_id, si.product_name
-                order by quantity desc
-                limit @limit;
-                """
-            : """
-                select
-                    product_id,
-                    product_name,
-                    coalesce(sum(quantity), 0)::int as quantity,
-                    coalesce(sum(subtotal), 0) as income
-                from sale_items
-                group by product_id, product_name
-                order by quantity desc
-                limit @limit;
-                """;
-
-        AddParameter(command, "from", from, System.Data.DbType.DateTime);
-        AddParameter(command, "to", to, System.Data.DbType.DateTime);
-        AddParameter(command, "limit", Math.Clamp(limit, 1, 50), System.Data.DbType.Int32);
-
         try
         {
-            var result = new List<TopProductResponse>();
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
+            var query = db.SaleItems.AsNoTracking().AsQueryable();
+
+            if (from.HasValue)
             {
-                result.Add(new TopProductResponse(
-                    reader.GetGuid(0),
-                    reader.GetString(1),
-                    reader.GetInt32(2),
-                    reader.GetDecimal(3)));
+                query = query.Where(x => x.Sale.OccurredAt >= from.Value);
             }
+
+            if (to.HasValue)
+            {
+                query = query.Where(x => x.Sale.OccurredAt <= to.Value);
+            }
+
+            var result = await query
+                .GroupBy(x => new { x.ProductId, x.ProductName })
+                .Select(x => new TopProductResponse(
+                    x.Key.ProductId,
+                    x.Key.ProductName,
+                    x.Sum(i => i.Quantity),
+                    x.Sum(i => i.Subtotal),
+                    x.Sum(i => i.QuantityBase == 0 ? i.Quantity : i.QuantityBase)))
+                .OrderByDescending(x => x.QuantityBase == 0 ? x.Quantity : x.QuantityBase)
+                .Take(Math.Clamp(limit, 1, 50))
+                .ToListAsync(cancellationToken);
 
             return Ok(result);
         }
@@ -183,21 +133,8 @@ public sealed class ReportsController(TiendaPeDbContext db) : ControllerBase
         var value = await db.Products
             .AsNoTracking()
             .Where(x => x.IsActive)
-            .SumAsync(x => x.Stock * x.PurchasePrice, cancellationToken);
+            .SumAsync(x => (x.StockBase == 0 ? x.Stock : x.StockBase) * (x.AverageCostBase == 0 ? x.PurchasePrice : x.AverageCostBase), cancellationToken);
 
         return Ok(new InventoryValueResponse(value));
-    }
-
-    private static void AddParameter(
-        System.Data.Common.DbCommand command,
-        string name,
-        object? value,
-        System.Data.DbType dbType)
-    {
-        var parameter = command.CreateParameter();
-        parameter.ParameterName = name;
-        parameter.DbType = dbType;
-        parameter.Value = value ?? DBNull.Value;
-        command.Parameters.Add(parameter);
     }
 }
