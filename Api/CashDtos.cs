@@ -13,6 +13,12 @@ public sealed record CashSessionResponse(
     decimal? Difference,
     decimal CashSales,
     decimal DigitalSales,
+    decimal YapeSales,
+    decimal PlinSales,
+    decimal TransferSales,
     decimal CashExpenses,
     decimal DigitalExpenses,
+    decimal SupplierPayments,
+    decimal PersonalWithdrawals,
+    decimal? FinalCash,
     bool HasNegativeStreakAlert);

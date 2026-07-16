@@ -42,7 +42,11 @@ public sealed class ReportsController(TiendaPeDbContext db) : ControllerBase
             x => (x.UnitCostBase ?? x.Product.PurchasePrice) * (x.QuantityBase == 0 ? x.Quantity : x.QuantityBase),
             cancellationToken);
         var cashSales = await salesQuery.Where(x => x.PaymentMethod == PaymentMethod.Cash).SumAsync(x => x.Total, cancellationToken);
-        var digitalSales = await salesQuery.Where(x => x.PaymentMethod == PaymentMethod.YapePlin).SumAsync(x => x.Total, cancellationToken);
+        var yapePlinSales = await salesQuery.Where(x => x.PaymentMethod == PaymentMethod.YapePlin).SumAsync(x => x.Total, cancellationToken);
+        var yapeSales = await salesQuery.Where(x => x.PaymentMethod == PaymentMethod.Yape).SumAsync(x => x.Total, cancellationToken);
+        var plinSales = await salesQuery.Where(x => x.PaymentMethod == PaymentMethod.Plin).SumAsync(x => x.Total, cancellationToken);
+        var transferSales = await salesQuery.Where(x => x.PaymentMethod == PaymentMethod.Transfer).SumAsync(x => x.Total, cancellationToken);
+        var digitalSales = yapePlinSales + yapeSales + plinSales;
 
         return Ok(new SummaryResponse(
             income,
@@ -50,7 +54,10 @@ public sealed class ReportsController(TiendaPeDbContext db) : ControllerBase
             costOfGoodsSold,
             income - costOfGoodsSold - expenses,
             cashSales,
-            digitalSales));
+            digitalSales,
+            yapePlinSales + yapeSales,
+            plinSales,
+            transferSales));
     }
 
     [HttpGet("top-products")]

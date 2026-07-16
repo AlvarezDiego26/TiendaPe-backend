@@ -102,11 +102,12 @@ public sealed class CashSessionsController(TiendaPeDbContext db) : ControllerBas
 
         var cashSales = session.Sales.Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Total);
         var cashExpenses = session.Expenses.Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Amount);
-        var expected = session.OpeningAmount + cashSales - cashExpenses;
+        var expected = session.OpeningAmount + cashSales - cashExpenses - session.SupplierPayments - session.PersonalWithdrawals;
 
         session.ExpectedAmount = expected;
         session.CountedAmount = request.CountedAmount;
         session.Difference = request.CountedAmount - expected;
+        session.FinalCash = request.CountedAmount;
         session.ClosedAt = DateTime.UtcNow;
         session.ClosedById = CurrentUserId();
 
@@ -121,11 +122,12 @@ public sealed class CashSessionsController(TiendaPeDbContext db) : ControllerBas
         {
             var openCashSales = openSession.Sales.Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Total);
             var openCashExpenses = openSession.Expenses.Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Amount);
-            var openExpected = openSession.OpeningAmount + openCashSales - openCashExpenses;
+            var openExpected = openSession.OpeningAmount + openCashSales - openCashExpenses - openSession.SupplierPayments - openSession.PersonalWithdrawals;
 
             openSession.ExpectedAmount = openExpected;
             openSession.CountedAmount = openExpected;
             openSession.Difference = 0;
+            openSession.FinalCash = openExpected;
             openSession.ClosedAt = session.ClosedAt;
             openSession.ClosedById = session.ClosedById;
         }
@@ -190,9 +192,15 @@ public sealed class CashSessionsController(TiendaPeDbContext db) : ControllerBas
                 c.counted_amount,
                 c.difference,
                 coalesce((select sum(s.total) from sales s where s.cash_session_id = c.id and s.payment_method = 'cash'), 0) as cash_sales,
-                coalesce((select sum(s.total) from sales s where s.cash_session_id = c.id and s.payment_method = 'yape_plin'), 0) as digital_sales,
+                coalesce((select sum(s.total) from sales s where s.cash_session_id = c.id and s.payment_method in ('yape_plin', 'yape', 'plin')), 0) as digital_sales,
+                coalesce((select sum(s.total) from sales s where s.cash_session_id = c.id and s.payment_method in ('yape_plin', 'yape')), 0) as yape_sales,
+                coalesce((select sum(s.total) from sales s where s.cash_session_id = c.id and s.payment_method = 'plin'), 0) as plin_sales,
+                coalesce((select sum(s.total) from sales s where s.cash_session_id = c.id and s.payment_method = 'transfer'), 0) as transfer_sales,
                 coalesce((select sum(e.amount) from expenses e where e.cash_session_id = c.id and e.payment_method = 'cash'), 0) as cash_expenses,
-                coalesce((select sum(e.amount) from expenses e where e.cash_session_id = c.id and e.payment_method = 'yape_plin'), 0) as digital_expenses
+                coalesce((select sum(e.amount) from expenses e where e.cash_session_id = c.id and e.payment_method in ('yape_plin', 'yape', 'plin', 'transfer')), 0) as digital_expenses,
+                c.supplier_payments,
+                c.personal_withdrawals,
+                c.final_cash
             from cash_sessions c
             where c.closed_at is null
             order by c.opened_at desc
@@ -219,12 +227,18 @@ public sealed class CashSessionsController(TiendaPeDbContext db) : ControllerBas
                 reader.GetDecimal(8),
                 reader.GetDecimal(9),
                 reader.GetDecimal(10),
+                reader.GetDecimal(11),
+                reader.GetDecimal(12),
+                reader.GetDecimal(13),
+                reader.GetDecimal(14),
+                reader.GetDecimal(15),
+                reader.IsDBNull(16) ? null : reader.GetDecimal(16),
                 false);
         }
         catch (Exception ex) when (ex is TimeoutException || ex.InnerException is TimeoutException)
         {
             return await db.CashSessions.AnyAsync(x => x.ClosedAt == null, cancellationToken)
-                ? new CashSessionResponse(Guid.Empty, DateTime.UtcNow, null, 0, null, null, null, 0, 0, 0, 0, false)
+                ? new CashSessionResponse(Guid.Empty, DateTime.UtcNow, null, 0, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, false)
                 : null;
         }
     }
@@ -232,9 +246,13 @@ public sealed class CashSessionsController(TiendaPeDbContext db) : ControllerBas
     private static CashSessionResponse ToResponse(CashSession session, bool hasNegativeStreakAlert)
     {
         var cashSales = session.Sales.Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Total);
-        var digitalSales = session.Sales.Where(x => x.PaymentMethod == PaymentMethod.YapePlin).Sum(x => x.Total);
+        var yapePlinSales = session.Sales.Where(x => x.PaymentMethod == PaymentMethod.YapePlin).Sum(x => x.Total);
+        var yapeSales = session.Sales.Where(x => x.PaymentMethod == PaymentMethod.Yape).Sum(x => x.Total);
+        var plinSales = session.Sales.Where(x => x.PaymentMethod == PaymentMethod.Plin).Sum(x => x.Total);
+        var transferSales = session.Sales.Where(x => x.PaymentMethod == PaymentMethod.Transfer).Sum(x => x.Total);
+        var digitalSales = yapePlinSales + yapeSales + plinSales;
         var cashExpenses = session.Expenses.Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Amount);
-        var digitalExpenses = session.Expenses.Where(x => x.PaymentMethod == PaymentMethod.YapePlin).Sum(x => x.Amount);
+        var digitalExpenses = session.Expenses.Where(x => x.PaymentMethod == PaymentMethod.YapePlin || x.PaymentMethod == PaymentMethod.Yape || x.PaymentMethod == PaymentMethod.Plin || x.PaymentMethod == PaymentMethod.Transfer).Sum(x => x.Amount);
 
         return new CashSessionResponse(
             session.Id,
@@ -246,8 +264,14 @@ public sealed class CashSessionsController(TiendaPeDbContext db) : ControllerBas
             session.Difference,
             cashSales,
             digitalSales,
+            yapePlinSales + yapeSales,
+            plinSales,
+            transferSales,
             cashExpenses,
             digitalExpenses,
+            session.SupplierPayments,
+            session.PersonalWithdrawals,
+            session.FinalCash,
             hasNegativeStreakAlert);
     }
 }

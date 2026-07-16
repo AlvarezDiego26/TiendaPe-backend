@@ -8,6 +8,9 @@ public static class ApiEnums
     {
         PaymentMethod.Cash => "cash",
         PaymentMethod.YapePlin => "yape_plin",
+        PaymentMethod.Yape => "yape",
+        PaymentMethod.Plin => "plin",
+        PaymentMethod.Transfer => "transfer",
         _ => value.ToString()
     };
 
@@ -27,11 +30,14 @@ public static class ApiEnums
         result = value.Trim().ToLowerInvariant() switch
         {
             "cash" or "efectivo" => PaymentMethod.Cash,
-            "yape_plin" or "yape-plin" or "yape/plin" or "yape" or "plin" => PaymentMethod.YapePlin,
+            "yape_plin" or "yape-plin" or "yape/plin" => PaymentMethod.YapePlin,
+            "yape" => PaymentMethod.Yape,
+            "plin" => PaymentMethod.Plin,
+            "transfer" or "transferencia" => PaymentMethod.Transfer,
             _ => default
         };
 
-        return value.Trim().ToLowerInvariant() is "cash" or "efectivo" or "yape_plin" or "yape-plin" or "yape/plin" or "yape" or "plin";
+        return value.Trim().ToLowerInvariant() is "cash" or "efectivo" or "yape_plin" or "yape-plin" or "yape/plin" or "yape" or "plin" or "transfer" or "transferencia";
     }
 
     public static string ToApiValue(this ProductTrackingType value) => value switch

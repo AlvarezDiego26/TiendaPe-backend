@@ -6,7 +6,10 @@ public sealed record SummaryResponse(
     decimal CostOfGoodsSold,
     decimal NetProfit,
     decimal CashSales,
-    decimal DigitalSales);
+    decimal DigitalSales,
+    decimal YapeSales,
+    decimal PlinSales,
+    decimal TransferSales);
 
 public sealed record TopProductResponse(Guid ProductId, string ProductName, int Quantity, decimal Income, decimal QuantityBase = 0);
 public sealed record StagnantProductResponse(Guid ProductId, string Name, int Stock, DateTime? LastSaleAt);

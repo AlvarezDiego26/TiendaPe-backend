@@ -129,6 +129,18 @@ public sealed class SalesController(TiendaPeDbContext db) : ControllerBase
         {
             cashSession.CashSales += sale.Total;
         }
+        else if (paymentMethod == PaymentMethod.Yape)
+        {
+            cashSession.YapeSales += sale.Total;
+        }
+        else if (paymentMethod == PaymentMethod.Plin)
+        {
+            cashSession.PlinSales += sale.Total;
+        }
+        else if (paymentMethod == PaymentMethod.Transfer)
+        {
+            cashSession.TransferSales += sale.Total;
+        }
         else
         {
             cashSession.YapeSales += sale.Total;

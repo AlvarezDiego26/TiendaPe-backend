@@ -131,6 +131,17 @@ static async Task EnsureDatabasePerformanceAsync(IServiceProvider services)
             when duplicate_object then null;
         end $$;
 
+        do $$
+        begin
+            create type payment_method as enum ('cash', 'yape_plin', 'yape', 'plin', 'transfer');
+        exception
+            when duplicate_object then null;
+        end $$;
+
+        alter type payment_method add value if not exists 'yape';
+        alter type payment_method add value if not exists 'plin';
+        alter type payment_method add value if not exists 'transfer';
+
         alter table expenses
             add column if not exists recurring_start date;
 

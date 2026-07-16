@@ -42,7 +42,7 @@ public partial class TiendaPeDbContext : DbContext
         modelBuilder
             .HasPostgresEnum("inventory_movement_type", new[] { "entry", "sale", "adjustment" })
             .HasPostgresEnum("inventory_movement_reason", new[] { "purchase", "sale", "adjustment", "return", "initial_stock", "waste" })
-            .HasPostgresEnum("payment_method", new[] { "cash", "yape_plin" })
+            .HasPostgresEnum("payment_method", new[] { "cash", "yape_plin", "yape", "plin", "transfer" })
             .HasPostgresEnum("product_tracking_type", new[] { "unit", "package", "weight", "bulk" })
             .HasPostgresExtension("extensions", "pgcrypto");
 
